@@ -37,7 +37,26 @@ public class TelnetConnection : IDisposable
         Connect();
     }
 
-    private bool InternalConnect(int timeoutSeconds)
+    public bool Connect()
+    {
+        bool result = true;
+        try
+        {
+            if (tcpClient == null)
+                tcpClient = new TcpClient();
+
+            if (!tcpClient.Connected)
+                return InternalConnectAPM(timeoutSeconds: 3);
+
+            return result;
+        }
+        catch (Exception)
+        {
+            tcpClient = null;
+            return false;
+        }
+    }
+    private bool InternalConnectAPM(int timeoutSeconds)
     {
         IAsyncResult asyncResult = tcpClient.BeginConnect(_host, _port, null, null);
         asyncResult.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(timeoutSeconds));
@@ -50,25 +69,47 @@ public class TelnetConnection : IDisposable
         return true;
     }
 
-    public bool Connect()
+    public Task<bool> ConnectAsync(CancellationToken cancellationToken = default)
     {
-        bool result = true;
         try
         {
             if (tcpClient == null)
                 tcpClient = new TcpClient();
 
             if (!tcpClient.Connected)
-                return InternalConnect(timeoutSeconds: 3);
+                return InternalConnectTAP(timeoutSeconds: 3, cancellationToken);
 
-            return result;
+            return Task.FromResult(true);
         }
         catch (Exception)
         {
-            tcpClient = null;
-            return false;
+            tcpClient?.Dispose();
+            return Task.FromResult(false);
         }
     }
+    private async Task<bool> InternalConnectTAP(int timeoutSeconds, CancellationToken cancellationToken)
+    {
+        using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
+        using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken))
+        {
+            try
+            {
+                await tcpClient.ConnectAsync(_host, _port, linkedCts.Token);
+                return tcpClient.Connected;
+            }
+            catch (OperationCanceledException)
+            {
+                // Either timeout or caller requested cancellation
+                return false;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Exception: {0}", e);
+                return false;
+            }
+        }
+    }
+
 
     public void Disconnect()
     {
